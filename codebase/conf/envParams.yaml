@@ -41,5 +41,6 @@ tasks:
 
   - env: InvertedPendulum-v2
     expert_db: 'assets/InvertedPendulum_expert_paths.pickle'
-    occlusion: [0,1]    
+    # occlusion: [0,1]  
+    occlusion: []  
     init_logstd: 0

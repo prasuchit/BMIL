@@ -346,8 +346,7 @@ class BMIL(nn.Module):
         action = self.action_dist.sample(actor_state, deterministic=False)
 
         # first #agent_bs actions are sampled from the actor, rest are pre-defined expert actions (from database)
-        model_return.action = torch.cat([action[:self.agent_bs],
-            curr_memory['expert_ac'][self.agent_bs:].type(action.type())], dim=0)
+        model_return.action = torch.cat([action[:self.agent_bs], curr_memory['expert_ac'][self.agent_bs:].type(action.type())], dim=0)
 
         discriminator_acs = self.discriminator_ac_encoder(model_return.action.detach())
         discriminator_in = torch.cat([encoded_state.detach(), normalized_ob, discriminator_acs], dim=1)

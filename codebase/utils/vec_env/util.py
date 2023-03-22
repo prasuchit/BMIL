@@ -20,9 +20,7 @@ def dict_to_obs(obs_dict):
     Convert an observation dict into a raw array if the
     original observation space was not a Dict space.
     """
-    if set(obs_dict.keys()) == {None}:
-        return obs_dict[None]
-    return obs_dict
+    return obs_dict[None] if set(obs_dict.keys()) == {None} else obs_dict
 
 
 def obs_space_info(obs_space):
@@ -54,6 +52,4 @@ def obs_to_dict(obs):
     """
     Convert an observation into a dict.
     """
-    if isinstance(obs, dict):
-        return obs
-    return {None: obs}
+    return obs if isinstance(obs, dict) else {None: obs}

@@ -1,6 +1,7 @@
 import numpy as np
 from multiprocessing import Process, Pipe
 from . import VecEnv, CloudpickleWrapper
+# from stable_baselines3.common.vec_env.subproc_vec_env import _worker as worker
 
 def worker(remote, parent_remote, env_fn_wrapper):
     parent_remote.close()
@@ -51,7 +52,7 @@ class SubprocVecEnv(VecEnv):
         for remote in self.work_remotes:
             remote.close()
 
-        if spaces == None:
+        if spaces is None:
             self.remotes[0].send(('get_spaces', None))
             observation_space, action_space = self.remotes[0].recv()
         else:
@@ -79,7 +80,8 @@ class SubprocVecEnv(VecEnv):
     def reset(self):
         for remote in self.remotes:
             remote.send(('reset', None))
-        return np.stack([remote.recv() for remote in self.remotes])
+        obsvs = np.stack([remote.recv() for remote in self.remotes])
+        return obsvs
 
     def expert_ac(self):
         """
@@ -107,5 +109,4 @@ class SubprocVecEnv(VecEnv):
     def get_images(self):
         for pipe in self.remotes:
             pipe.send(('render', None))
-        imgs = [pipe.recv() for pipe in self.remotes]
-        return imgs
+        return [pipe.recv() for pipe in self.remotes]

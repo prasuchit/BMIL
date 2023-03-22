@@ -6,14 +6,15 @@ from gym.spaces.box import Box
 
 from baselines import bench
 from expert_envs import ExpertEnv
-
+from stable_baselines3.common.env_checker import check_env
 BIG = 1e6
 
 def make_env(env_id, seed, rank, log_dir, occlusion, sensor_noise):
     def _thunk():
         env = gym.make(env_id)
-        env.seed(seed + rank)
-
+        # env.seed(seed + rank)
+        check_env(env)
+        # print("1.) ENV OBSV SHAPE: ", env.observation_space.shape[0])
         assert not (hasattr(gym.envs, 'atari') and isinstance(env.unwrapped, gym.envs.atari.atari_env.AtariEnv)), "Atari not supported. Please use gym MuJoCo envs!"
 
         if log_dir is not None:
@@ -37,16 +38,21 @@ def make_env(env_id, seed, rank, log_dir, occlusion, sensor_noise):
             # Since occlusion-list for Ant-v2 and Humanoid-v2 is too-long, we generate it here using codewords used in envParams.yaml
             if occlusion == [9999]:  # Ant-v2
                 print("Generating Ant-v2 occlusion list")
-                generated_occlusion = [x for x in range(13)] + [x for x in range(27, 111)]
+                generated_occlusion = list(range(13)) + list(range(27, 111))
                 env = OccludeWrapper(env, generated_occlusion)
             elif occlusion == [7777]:  # Humanoid:-v2
                 print("Generating Humanoid-v2 occlusion list")
-                generated_occlusion = [x for x in range(22)] + [x for x in range(45, 185)] + [x for x in range(269, 376)]
+                generated_occlusion = (
+                    list(range(22))
+                    + list(range(45, 185))
+                    + list(range(269, 376))
+                )
                 env = OccludeWrapper(env, generated_occlusion)
             else:
                 env = OccludeWrapper(env, occlusion)
 
-        print(env)
+        # print(env)
+        # print("2.) ENV OBSV SHAPE: ", env.observation_space.shape[0])
         return env
 
     return _thunk
@@ -64,7 +70,8 @@ class WrapPyTorch(gym.ObservationWrapper):
         self.observation_space = Box(
             self.observation_space.low[0, 0, 0],
             self.observation_space.high[0, 0, 0],
-            [obs_shape[2], obs_shape[1], obs_shape[0]]
+            [obs_shape[2], obs_shape[1], obs_shape[0]],
+            dtype=np.float32
         )
 
     def _observation(self, observation):
@@ -97,20 +104,20 @@ class OccludeWrapper(gym.ObservationWrapper):
         self._set_sensor_mask(sensor_idx)
 
         # set new observation space.
-        ub = BIG * np.ones(env.observation_space.shape)
+        ub = BIG * np.ones(env.observation_space.shape, dtype=np.float32)
         ub = self.occlude(ub)
-        self.observation_space = Box(ub * -1, ub)
+        self.observation_space = Box(ub * -1, ub, dtype=np.float32)
 
     def _set_sensor_mask(self, sensor_idx):
         obsdim = np.prod(self.env.observation_space.high.shape)
         if len(sensor_idx) > obsdim:
             raise ValueError("Length of sensor mask ({0}) cannot be greater than observation dim ({1})".format(len(sensor_idx), obsdim))
         if len(sensor_idx) == obsdim and not np.any(np.array(sensor_idx) > 1):
-            sensor_mask = np.array(sensor_idx, dtype=np.bool)
+            sensor_mask = np.array(sensor_idx, dtype=bool)
         elif np.any(np.unique(sensor_idx, return_counts=True)[1] > 1):
             raise ValueError("Double entries or boolean mask with dim ({0}) < observation dim ({1})".format(len(sensor_idx), obsdim))
         else:
-            sensor_mask = np.zeros((obsdim,), dtype=np.bool)
+            sensor_mask = np.zeros((obsdim,), dtype=bool)
             sensor_mask[sensor_idx] = 1
         self._sensor_mask = sensor_mask
 

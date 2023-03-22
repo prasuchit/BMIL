@@ -17,7 +17,7 @@ BMIL results can be reproduced with *bash run_mujoco.sh [env] task_aware True*
 
 ### Expert trajectories
 
-Please update the path to expert trajectories in the file "code/conf/envParams.yaml". Also see the storage requirements in "code/expert_envs.py" and modify as per convenience. 
+Please update the path to expert trajectories in the file "codebase/conf/envParams.yaml". Also see the storage requirements in "codebase/expert_envs.py" and modify as per convenience. 
 
 
 ## Credits

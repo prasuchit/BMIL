@@ -1,5 +1,9 @@
 import random
 import numpy as np
+import os
+import gym
+path = os.path.dirname (os.path.realpath (__file__))
+PACKAGE_PATH = os.path.abspath(os.path.join(path, os.pardir))
 
 def storage_requirement():
     s = ("Expert trajectories should be stored as a list. Each list-entry should be a dictionary"
@@ -14,8 +18,12 @@ class ExpertEnv():
         This "environment" only replays trajectories from an expert database, rather than interacting with Gym.
         """
 
+        self.waiting = False
+        self.closed = False
         self.env_id = env_id
         random.seed(seed + rank)
+        self.env = gym.make(self.env_id)
+        database = f'{PACKAGE_PATH}/{database}'
         if database.endswith('.npy'):
             expert_paths = np.load(database).tolist()
         elif database.endswith('.pickle'):
@@ -32,7 +40,7 @@ class ExpertEnv():
             self.rank_paths = expert_paths[rank:][::num_expert_envs]
             del expert_paths
 
-        print('Rank:{} loaded {} paths from {}'.format(rank, len(self.rank_paths), database))
+        # print(f'Rank:{rank} loaded {len(self.rank_paths)} paths from {database}')
 
     def reset(self):
         self.current_path = random.choice(self.rank_paths)
@@ -57,11 +65,23 @@ class ExpertEnv():
 
     def render(self):
         raise NotImplementedError
+    
+    def close(self):
+        if self.closed:
+            return
+        if self.waiting:
+            for remote in self.remotes:
+                remote.recv()
+        for remote in self.remotes:
+            remote.send(('close', None))
+        for process in self.processes:
+            process.join()
+        self.closed = True
 
     @property
     def observation_space(self):
-        raise NotImplementedError
+        return self.env.observation_space
 
     @property
     def action_space(self):
-        raise NotImplementedError
+        return self.env.action_space

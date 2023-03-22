@@ -8,23 +8,33 @@ Please read the docs. In short: @ex.config changes configuration of experiment, 
 makes configuration available, and @ex.automain is the entry point of the program.
 
 Configuration happens in 4 places:
-- code/conf/mujocoEnv.yaml (environment-independent parameters)
+- codebase/conf/mujocoEnv.yaml (environment-independent parameters)
 - environment.config_file: (environment-dependent parameters; path provided via command line)
 - The command line (overrides everything when specified)
 - The general_config() function below updates some values
 """
 
+
+
+import contextlib
 import sys
 import os
 import time
 import logging
 import collections
 import itertools
+from tqdm import tqdm
 import yaml
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+
+################# To avoid console flooding ####################
+import shutup; shutup.please()
+import warnings
+warnings.filterwarnings("ignore")
+################################################################
 
 from gym.envs.registration import register
 from envs import make_env, make_expert_envs
@@ -32,6 +42,8 @@ from storage import RolloutStorage
 from experience_replay import ExpReplay
 from utils.vec_env.dummy_vec_env import DummyVecEnv
 from utils.vec_env.subproc_vec_env import SubprocVecEnv
+# from stable_baselines3.common.vec_env.subproc_vec_env import SubprocVecEnv
+# from stable_baselines3.common.vec_env.dummy_vec_env import DummyVecEnv
 from utils import helpers
 
 from sacred import Experiment
@@ -44,7 +56,7 @@ ex.captured_out_filter = apply_backspaces_and_linefeeds
 # Add yaml files to the sacred configuration
 DIR = os.path.dirname(sys.argv[0])
 DIR = '.' if DIR == '' else DIR
-ex.add_config(DIR + '/conf/mujocoEnv.yaml')
+ex.add_config(f'{DIR}/conf/mujocoEnv.yaml')
 
 from sacred.observers import FileStorageObserver
 ex.observers.append(FileStorageObserver.create('saved_runs'))
@@ -63,12 +75,15 @@ def general_config(cuda, algorithm, environment, model_setting):
 
     # Load information from the environment configuration yaml file
     with open(environment['config_path'], 'r') as f:
-        env_params = yaml.load(f)
+        env_params = yaml.safe_load(f)
+
 
     try:
         env_parameters = list(filter(lambda x, environment=environment: x['env'] == environment['name'], env_params['tasks']))[0]
     except:
-        raise ValueError('Environment not found in yaml config: %s'%(environment.config_path))
+        raise ValueError(
+            f'Environment not found in yaml config: {environment.config_path}'
+        )
 
     # Task-specific params are contained in 'env_parameters'
     environment['expert_db'] = env_parameters['expert_db']
@@ -96,7 +111,7 @@ def setup(model_setting, algorithm, device, _run, _log, log, seed, cuda):
     """
 
     # Create working dir
-    id_tmp_dir = "{}/{}/".format(log['tmp_dir'], _run._id)
+    id_tmp_dir = f"{log['tmp_dir']}/{_run._id}/"
     helpers.safe_make_dirs(id_tmp_dir)
 
     np.set_printoptions(precision=2)
@@ -111,6 +126,9 @@ def setup(model_setting, algorithm, device, _run, _log, log, seed, cuda):
         logger.setLevel(logging.DEBUG)
 
     envs = register_and_create_envs(id_tmp_dir)
+    
+    # print("3.) ENV OBSV SHAPE: ", envs.observation_space.shape[0])
+    
     model = create_model(envs)
 
     # Experience replay buffer to store off-policy data.
@@ -158,7 +176,7 @@ def setup(model_setting, algorithm, device, _run, _log, log, seed, cuda):
 def create_model(envs, algorithm, model_setting, device):
     """
     Args:
-        envs: Vector of environments, creeated by register_and_create_envs()
+        envs: Vector of environments, created by register_and_create_envs()
         All other args are automatically provided by sacred
     """
 
@@ -181,21 +199,18 @@ def register_and_create_envs(id_tmp_dir, seed, environment, algorithm):
     """
 
     if environment['entry_point']:
-        try:
+        with contextlib.suppress(Exception):
             register(
                 id=environment['name'],
                 entry_point=environment['entry_point'],
                 kwargs=environment['config'],
                 max_episode_steps=environment['max_episode_steps']
             )
-        except Exception:
-            pass
-
     num_envs = algorithm['num_processes']
     num_expert_envs = algorithm['num_expert_processes']
 
     envs = [make_env(environment['name'], seed, i, id_tmp_dir,
-                      occlusion=list(environment['occlusion']), sensor_noise=float(environment['sensor_noise']))
+                    occlusion=list(environment['occlusion']), sensor_noise=float(environment['sensor_noise']))
             for i in range(num_envs-num_expert_envs)]
 
     # Create "expert environments" which only replay trajectories from an expert database, rather than interacting with Gym.
@@ -217,8 +232,7 @@ def run_model_offPol(model, curr_memory_offPol):
     """
     Run model (1-step) with "off-policy" data
     """
-    model_return = model.forward_offPol(curr_memory_offPol=curr_memory_offPol)
-    return model_return
+    return model.forward_offPol(curr_memory_offPol=curr_memory_offPol)
 
 @ex.capture
 def run_model(model, curr_memory, envs, device):
@@ -253,7 +267,6 @@ def run_model(model, curr_memory, envs, device):
     # Update curr_memory
     curr_memory['prev_ob'] = curr_memory['curr_ob']
     curr_memory['curr_ob'] = torch.from_numpy(obs).float()
-
     # For start of a new episode, make the prev_ob same as the curr_ob
     curr_memory['prev_ob'] = mask * curr_memory['prev_ob'] + (1 - mask) * curr_memory['curr_ob']
     mask = mask.to(device)
@@ -367,11 +380,7 @@ def main(_run,
     # Disable experience replay if belief-reg=False in the Task-aware setting.
     disable_replay = (algorithm['belief_loss_type'] == 'task_aware' and algorithm['belief_regularization'] == False)
 
-    # Count parameters
-    num_parameters = 0
-    for p in model.parameters():
-        num_parameters += p.nelement()
-
+    num_parameters = sum(p.nelement() for p in model.parameters())
     # Create optimisers. We have 2 optimizers:
     # 1. bp_optimizer: for parameters of the belief module and policy
     # 2. d_optimizer: for discriminator parameters
@@ -388,18 +397,21 @@ def main(_run,
 
     adversarial_criterion = torch.nn.BCELoss(reduction='none')
 
-    print(model); sys.stdout.flush() 
-    logging.info('Number of parameters =\t{}'.format(num_parameters))
-    logging.info("Total number of updates: {}".format(num_updates))
-    logging.info("Learning rate: {}".format(opt['lr']))
-    helpers.print_header()
+    # print(model)
+    # sys.stdout.flush()
+    # logging.info(f'Number of parameters =\t{num_parameters}')
+    # logging.info(f"Total number of updates: {num_updates}")
+    # logging.info(f"Learning rate: {opt['lr']}")
+    # helpers.print_header()
 
     num_offPol_updates = 0
     running_paths = [None]*agent_bs
     start = time.time()
 
+    torch.autograd.set_detect_anomaly(True)
+    
     # == Main training loop ==
-    for j in range(num_updates):
+    for j in tqdm(range(num_updates)):
 
         # Learning-rate schedule.
         if opt['lr_schedule'] == 'linear_decay':
@@ -468,39 +480,51 @@ def main(_run,
         # =======
         # Critic-loss
         value_loss = (v_target - values).pow(2)
-        value_loss = value_loss[:, :agent_bs, ...].mean()
+        value_final_loss = value_loss[:, :agent_bs, ...].mean()
 
         # Actor-loss
         pg_loss = -(advantages * ac_log_probs)
-        pg_loss = pg_loss[:, :agent_bs, ...].mean()
+        pg_final_loss = pg_loss[:, :agent_bs, ...].mean()
 
         # Entropy- and Belief-regularizations
-        dist_entropy = dist_entropy[:, :agent_bs, ...].mean()
-        reg_loss = reg_loss.mean()
+        dist_final_entropy = dist_entropy[:, :agent_bs, ...].mean()
+        reg_final_loss = reg_loss.mean()
 
         # Discriminator loss
         discriminator_loss = adversarial_criterion(discriminator_sigmoids_d.squeeze(dim=2), discriminator_targets)
-        discriminator_loss = discriminator_loss[:, :agent_bs].mean() + discriminator_loss[:, agent_bs:].mean()
+        discriminator_final_loss = discriminator_loss[:, :agent_bs].mean() + discriminator_loss[:, agent_bs:].mean()
 
         # Adversarial loss for belief RNN
         adversarial_b_loss = adversarial_criterion(discriminator_sigmoids_b.squeeze(dim=2), discriminator_targets)
-        adversarial_b_loss = adversarial_b_loss[:, :agent_bs].mean() + adversarial_b_loss[:, agent_bs:].mean()
+        adversarial_b_final_loss = adversarial_b_loss[:, :agent_bs].mean() + adversarial_b_loss[:, agent_bs:].mean()
         # =======
 
-        total_loss = (value_loss * loss_function['value_loss_coef']
-                      + pg_loss * loss_function['pg_loss_coef']
-                      + reg_loss * loss_function['reg_loss_coef']
-                      - adversarial_b_loss * loss_function['adversarial_loss_coef']
-                      - dist_entropy * loss_function['entropy_coef'])
+        new_v_loss = value_final_loss * loss_function['value_loss_coef']
+        new_pg_loss = pg_final_loss * loss_function['pg_loss_coef']
+        new_reg_loss =  reg_final_loss * loss_function['reg_loss_coef']
+        new_adv_loss = -(adversarial_b_final_loss * loss_function['adversarial_loss_coef'])
+        new_dist_loss = -(dist_final_entropy * loss_function['entropy_coef'])
+        
+        total_loss = torch.sum(torch.stack([new_v_loss.clone(), new_pg_loss.clone(), new_reg_loss.clone(), new_adv_loss.clone(), new_dist_loss.clone()]), dim=0)
+        
+        # total_loss = (value_final_loss * loss_function['value_loss_coef']
+        #               + pg_final_loss * loss_function['pg_loss_coef']
+        #               + reg_final_loss * loss_function['reg_loss_coef']
+        #               - adversarial_b_final_loss * loss_function['adversarial_loss_coef']
+        #               - dist_final_entropy * loss_function['entropy_coef'])
+        
+        print("Total loss: ", total_loss)
 
         # Only reset the (recurrent part of the) computation graph every 'multiplier_backprop_length' iterations
-        retain_graph = j % algorithm['multiplier_backprop_length'] != 0
+        # retain_graph = j % algorithm['multiplier_backprop_length'] != 0
+        retain_graph = False
 
         bp_optimizer.zero_grad()
+        print('retain_graph:', retain_graph)
         total_loss.backward(retain_graph=retain_graph)
 
         d_optimizer.zero_grad()
-        discriminator_loss_ = discriminator_loss * loss_function['adversarial_loss_coef']
+        discriminator_loss_ = discriminator_final_loss * loss_function['adversarial_loss_coef']
         discriminator_loss_.backward(retain_graph=False)
 
         if opt['max_grad_norm'] > 0:
@@ -559,8 +583,9 @@ def main(_run,
                 offPol_reg_loss = torch.stack(tuple(offPol_reg_loss), dim=0).mean() * loss_function['reg_loss_coef']
 
                 # Only reset the (recurrent part of the) computation graph every 'multiplier_backprop_length' iterations
-                retain_offPol_graph = num_offPol_updates % algorithm['multiplier_backprop_length'] != 0
-
+                # retain_offPol_graph = num_offPol_updates % algorithm['multiplier_backprop_length'] != 0
+                retain_offPol_graph = False
+                
                 bp_optimizer.zero_grad()
                 offPol_reg_loss.backward(retain_graph=retain_offPol_graph)
 
@@ -576,6 +601,7 @@ def main(_run,
         # Logging
         if j % log['log_interval'] == 0:
             end = time.time()
+            print("Time taken to converge: ", end-start)
             helpers.log_and_print(j, num_updates, end - start, final_rewards[:agent_bs], final_lens[:agent_bs],
-                                tracked_values, num_ended_episodes, total_loss, value_loss, pg_loss, dist_entropy,
-                                discriminator_loss, algorithm, _run)
+                                tracked_values, num_ended_episodes, total_loss, value_final_loss, pg_final_loss, dist_final_entropy,
+                                discriminator_final_loss, algorithm, _run)

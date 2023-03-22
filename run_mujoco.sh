@@ -30,8 +30,8 @@ function list_include_env {
 
 list_include_env "$envs_list" $1
 
-python ./code/main.py -p with \
+python ./codebase/main.py -p with \
     environment.name=$1 \
-    environment.config_path=$PWD'/code/conf/envParams.yaml' \
+    environment.config_path=$PWD'/codebase/conf/envParams.yaml' \
     algorithm.belief_loss_type=$2 \
     algorithm.belief_regularization=$3
